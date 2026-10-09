@@ -74,7 +74,7 @@ test('owned Docker startup records actual ports and recovers publication failure
         if(args[0]==='version') return '{"Os":"linux","Arch":"amd64"}';
         if(args[0]==='image') return JSON.stringify([{Id:'sha256:'+'a'.repeat(64),Os:'linux',Architecture:'amd64',Config:{ExposedPorts:{'5380/tcp':{},'5382/tcp':{}}}}]);
         if(args[0]==='run') { owner=args[args.indexOf('--label')+1].split('=')[1];return id; }
-        if(args[0]==='inspect') return JSON.stringify([{Id:id,Config:{Labels:{'cloud.local.setup-localcloud.owner':owner}},NetworkSettings:{Ports:{'5380/tcp':[{HostIp:broken?'0.0.0.0':'127.0.0.1',HostPort:'6100'}],'5382/tcp':[{HostIp:'127.0.0.1',HostPort:'6102'}]}}}]);
+        if(args[0]==='container' && args[1]==='inspect') return JSON.stringify([{Id:id,Config:{Labels:{'cloud.local.setup-localcloud.owner':owner}},NetworkSettings:{Ports:{'5380/tcp':[{HostIp:broken?'0.0.0.0':'127.0.0.1',HostPort:'6100'}],'5382/tcp':[{HostIp:'127.0.0.1',HostPort:'6102'}]}}}]);
         if(args[0]==='network' && args[1]==='inspect') throw Error('No such network');
         if(args[0]==='volume' && args[1]==='inspect') throw Error('No such volume');
         return '';
@@ -164,12 +164,26 @@ test('execution cleanup removes verified children and owned resources and reject
     const expected={'com.localcloud.managed':'true','com.localcloud.volume-name':volume,'com.localcloud.config-hash':record.hash};
     const command=args=>{
       calls.push(args);
-      if(args[0]==='inspect')return JSON.stringify([{Id:args[1],Config:{Labels:args[1]===record.id?{'cloud.local.setup-localcloud.owner':owner}:foreign?{}:expected}}]);
-      if(args[0]==='ps')return 'b'.repeat(64);
+      if(args[0]==='container' && args[1]==='inspect')return JSON.stringify([{Id:args[2],Config:{Labels:args[2]===record.id?{'cloud.local.setup-localcloud.owner':owner}:foreign?{}:expected}}]);
+      if(args[0]==='ps') {assert.ok(args.includes('--no-trunc'));return record.id+'\n'+'b'.repeat(64);}
       if(args[1]==='inspect')return JSON.stringify([{Labels:{...expected,'cloud.local.setup-localcloud.owner':owner}}]);
       return '';
     };
     if(foreign) {assert.throws(()=>cleanup(record,command),/another runtime/);assert.equal(calls.some(args=>args[0]==='rm'),false);}
-    else {cleanup(record,command);assert.ok(calls.some(args=>args.join(' ')==='network rm '+network));assert.ok(calls.some(args=>args.join(' ')==='volume rm '+volume));assert.ok(calls.some(args=>args.join(' ')==='rm -f -v '+'b'.repeat(64)));}
+    else {cleanup(record,command);assert.ok(calls.some(args=>args.join(' ')==='network rm '+network));assert.ok(calls.some(args=>args.join(' ')==='volume rm '+volume));assert.ok(calls.some(args=>args.join(' ')==='rm -f -v '+'b'.repeat(64)));assert.equal(calls.filter(args=>args.join(' ')==='rm -f -v '+record.id).length,1);}
   }
+});
+
+test('a failed container creation cleans up its same-named network and data volume', () => {
+  const owner='12345678-1234-1234-1234-123456789abc';const network=`localcloud-ci-${owner}`,volume=`${network}-data`;
+  const record={id:network,owner,network,volume,hash:ownershipHash(network,volume)};const calls=[];
+  cleanup(record,args=>{
+    calls.push(args);
+    if(args[0]==='container')throw Error('No such container');
+    if(args[0]==='inspect')throw Error('Untyped inspect would resolve the network');
+    if(args[0]==='ps')return '';
+    if(args[1]==='inspect')return JSON.stringify([{Labels:{'cloud.local.setup-localcloud.owner':owner,'com.localcloud.volume-name':volume,'com.localcloud.config-hash':record.hash,'com.localcloud.managed':'true'}}]);
+    return '';
+  });
+  assert.ok(calls.some(args=>args.join(' ')==='network rm '+network));assert.ok(calls.some(args=>args.join(' ')==='volume rm '+volume));
 });

@@ -114,7 +114,7 @@ export function startRuntime(config, { command = docker, stateFile = process.env
     const id = command([...args, reference]);
     record.id = id;
     githubFile(stateFile, 'localcloud_record', JSON.stringify(record));
-    const container = JSON.parse(command(['inspect', id]))[0];
+    const container = JSON.parse(command(['container','inspect', id]))[0];
     const mapped = Object.fromEntries(ports.map(port => {
       const bindings = container.NetworkSettings.Ports[`${port}/tcp`];
       if (!bindings?.length || bindings[0].HostIp !== '127.0.0.1') throw new Error(`Missing loopback publication for ${port}`);
@@ -241,7 +241,7 @@ export function cleanup(record, command = docker) {
   if (!/^[a-f0-9-]{36}$/.test(record.owner) || !/^(?:[a-f0-9]{64}|localcloud-ci-[a-f0-9-]{36})$/.test(record.id)) throw new Error('Invalid LocalCloud ownership record');
   if(record.network && (record.network!==`localcloud-ci-${record.owner}` || record.volume!==`${record.network}-data` || record.hash!==ownershipHash(record.network,record.volume)))throw Error('Invalid execution ownership record');
   let container;
-  try { container = JSON.parse(command(['inspect', record.id]))[0]; }
+  try { container = JSON.parse(command(['container','inspect', record.id]))[0]; }
   catch (error) { if (!/No such (?:object|container)/i.test(error.message)) throw error; }
   if(container) {
     if (container.Config.Labels?.[OWNER_LABEL] !== record.owner) throw new Error('Refusing to remove a container not owned by this action');
@@ -249,11 +249,11 @@ export function cleanup(record, command = docker) {
   }
   if(record.network) {
     const expected={'com.localcloud.managed':'true','com.localcloud.volume-name':record.volume,'com.localcloud.config-hash':record.hash};
-    const children=command(['ps','-aq',...Object.entries(expected).flatMap(([key,value])=>['--filter',`label=${key}=${value}`])]).split(/\s+/).filter(Boolean);
+    const children=command(['ps','-aq','--no-trunc',...Object.entries(expected).flatMap(([key,value])=>['--filter',`label=${key}=${value}`])]).split(/\s+/).filter(Boolean);
     for(const id of children) {
       if(id===container?.Id)continue;
       let child;
-      try {child=JSON.parse(command(['inspect',id]))[0];}
+      try {child=JSON.parse(command(['container','inspect',id]))[0];}
       catch(error) {if(/No such (object|container)/i.test(error.message))continue;throw error;}
       if(!Object.entries(expected).every(([key,value])=>child.Config.Labels?.[key]===value))throw Error('Refusing to remove a child owned by another runtime');
       command(['rm','-f','-v',child.Id]);
@@ -265,7 +265,7 @@ export function cleanup(record, command = docker) {
       let resource;
       try {resource=JSON.parse(command([kind,'inspect',name]))[0];}
       catch(error) {if(/No such (?:network|volume)|network .+ not found/i.test(error.message))continue;throw error;}
-      if(resource.Labels?.[OWNER_LABEL]!==record.owner || resource.Labels?.['com.localcloud.volume-name']!==record.volume)throw Error(`Refusing to remove ${kind} not owned by this action`);
+      if(resource.Labels?.[OWNER_LABEL]!==record.owner || resource.Labels?.['com.localcloud.volume-name']!==record.volume || resource.Labels?.['com.localcloud.config-hash']!==record.hash || resource.Labels?.['com.localcloud.managed']!=='true')throw Error(`Refusing to remove ${kind} not owned by this action`);
       command([kind,'rm',name]);
     }
   }

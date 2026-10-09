@@ -51,7 +51,7 @@ finally {
     const record=runtime.record;
     try {
       cleanup(record);
-      for(const args of [['inspect',record.id],['network','inspect',record.network],['volume','inspect',record.volume]]) {
+      for(const args of [['container','inspect',record.id],['network','inspect',record.network],['volume','inspect',record.volume]]) {
         try {docker(args);throw Error(`Resource survived cleanup: ${args.at(-1)}`);}catch(error) {assert.match(error.message,/No such (object|container|network|volume)|network .+ not found/i);}
       }
       report.checks.cleanup='passed';

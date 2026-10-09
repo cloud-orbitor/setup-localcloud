@@ -17,7 +17,16 @@ inputs:
     description: Local Google Cloud project to create or select.
     default: localcloud-ci
   runtime-url:
-    description: Existing http://host:5380 gateway with canonical service ports. Leave empty for automatic Docker port mapping.
+    description: Existing local HTTP gateway. Leave empty for automatic Docker startup and loopback port mapping.
+  port-map:
+    description: JSON canonical-to-published port map for an existing runtime, for example '{"5380":15380,"5383":15383}'.
+    default: '{}'
+  docker-access:
+    description: Opt in to runner Docker socket access for native execution. Creates an isolated network and owned data volume; grants the runtime access to the runner Docker host.
+    default: 'false'
+  mcp:
+    description: Generate a job-local read-only MCP stdio configuration attached to this runtime and project. No CLI or second runtime is installed.
+    default: 'false'
   timeout:
     description: Maximum seconds to wait for selected-service readiness.
     default: '120'
@@ -28,6 +37,16 @@ outputs:
     description: Action-owned container ID, or empty for an existing runtime.
   project-id:
     description: Selected local project ID.
+  network:
+    description: Action-owned Docker network for application containers, or empty for an existing runtime.
+  env-file:
+    description: Job-local SDK environment file for processes on the runner.
+  docker-env-file:
+    description: SDK environment file using internal endpoints on the action-owned network, or empty for an existing runtime.
+  mcp-url:
+    description: Existing runtime MCP endpoint when MCP is enabled.
+  mcp-config:
+    description: Job-local MCP client configuration file when MCP is enabled.
 runs:
   using: node24
   main: src/main.mjs

@@ -62,7 +62,7 @@ export function acquireImage(config, command = docker) {
       }
     }
     if (!inspected) {
-      try { command(['pull', config.image]); }
+      try { command(['pull', '--platform', `${platform.os}/${platform.architecture}`, config.image]); }
       catch (pullError) {
         const guidance = /toomanyrequests|rate.?limit|429/i.test(pullError.message)
           ? 'Registry limit reached. Configure registry credentials before setup or use a verified mirror; retrying immediately will not reset a quota.'
@@ -78,7 +78,7 @@ export function acquireImage(config, command = docker) {
   if (!image || !/^sha256:[a-f0-9]{64}$/.test(image.Id || '') || !image.Config) throw Error('Invalid Docker image inspection');
   if (image.Os !== platform.os || image.Architecture !== platform.architecture) throw Error(`LocalCloud image platform ${image.Os}/${image.Architecture} does not match Docker ${platform.os}/${platform.architecture}`);
   if (reference.startsWith('sha256:') && image.Id !== reference) throw Error('Loaded image configuration digest mismatch');
-  return {image, reference};
+  return {image, reference, platform};
 }
 
 export function startRuntime(config, { command = docker, stateFile = process.env.GITHUB_STATE } = {}) {
@@ -86,14 +86,14 @@ export function startRuntime(config, { command = docker, stateFile = process.env
   if (config.url) return { url: config.url, ports: { '5380': Number(new URL(config.url).port || (config.url.startsWith('https:') ? 443 : 80)) }, record: null };
   if (process.platform !== 'linux' && !process.env.LOCALCLOUD_ACTION_LOCAL_TEST) throw new Error('Starting LocalCloud requires a Linux Docker runner; use runtime-url to connect to an existing runtime');
   const owner = randomUUID();
-  const {image, reference} = acquireImage(config, command);
+  const {image, reference, platform} = acquireImage(config, command);
   const ports = Object.keys(image.Config.ExposedPorts || {}).filter(p => /^\d+\/tcp$/.test(p)).map(p => Number(p.split('/')[0]));
   if (!ports.includes(5380) || ports.length > 100 || ports.some(p => p < 1 || p > 65535)) throw new Error('Image must expose the LocalCloud gateway on 5380/tcp');
   const name = `localcloud-ci-${owner}`;
   // Save ownership before creation so post cleanup can recover a partially failed docker run.
   const record = { id: name, owner };
   githubFile(stateFile, 'localcloud_record', JSON.stringify(record));
-  const args = ['run', '-d', '--pull', 'never', '--name', name, '--label', `${OWNER_LABEL}=${owner}`, '--memory', '4g', '-e', `LOCALCLOUD_SERVICES=${config.services.join(',')}`, '-e', `LOCALCLOUD_PROJECT=${config.project}`, '-e', 'LOCALCLOUD_DOCKER_ACCESS=false', '-e', 'LOCALCLOUD_TELEMETRY=false'];
+  const args = ['run', '--platform', `${platform.os}/${platform.architecture}`, '-d', '--pull', 'never', '--name', name, '--label', `${OWNER_LABEL}=${owner}`, '--memory', '4g', '-e', `LOCALCLOUD_SERVICES=${config.services.join(',')}`, '-e', `LOCALCLOUD_PROJECT=${config.project}`, '-e', 'LOCALCLOUD_DOCKER_ACCESS=false', '-e', 'LOCALCLOUD_TELEMETRY=false'];
   for (const port of ports) args.push('-p', `127.0.0.1::${port}`);
   try {
     const id = command([...args, reference]);

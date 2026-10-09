@@ -27,6 +27,7 @@ test('cold acquisition pulls once and validates the resulting platform', () => {
   });
   assert.equal(result.image.Id, image.Id);
   assert.equal(calls.filter(args => args[0] === 'pull').length, 1);
+  assert.deepEqual(calls.find(args => args[0] === 'pull').slice(0,3), ['pull','--platform','linux/amd64']);
 });
 
 test('daemon failures and wrong platform are not cache misses', () => {

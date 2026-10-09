@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { verifyOCI } from '../src/image-cache.mjs';
+import { verifyOCI, restoreOCI } from '../src/image-cache.mjs';
 
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'localcloud-oci-'));
@@ -45,4 +45,17 @@ test('an OCI tag cannot select a manifest outside the pinned platform', t => {
   const f = fixture(t);
   writeFileSync(join(f.directory,'index.json'), JSON.stringify({manifests:[{digest:'sha256:'+'f'.repeat(64),size:12,annotations:{'org.opencontainers.image.ref.name':'localcloud'}}]}));
   assert.throws(() => verifyOCI(f.directory, f.image, {os:'linux',architecture:'amd64'}), /manifest|digest/);
+});
+
+test('restoration imports through Docker so remote contexts retain their transport', t => {
+  const f = fixture(t); const calls = []; const transfers = [];
+  assert.equal(restoreOCI(f.directory, f.image, {os:'linux',architecture:'amd64'}, args => {
+    calls.push(args);
+    if (args[1] === 'inspect') throw Error('No such image');
+    return 'loaded';
+  }, (program,args) => transfers.push({program,args})), f.config.digest);
+  assert.equal(transfers[0].program, 'skopeo');
+  assert.match(transfers[0].args[2], /^docker-archive:/);
+  assert.equal(calls[1][1], 'load');
+  assert.equal(calls.some(args => args[0] === 'context'), false);
 });

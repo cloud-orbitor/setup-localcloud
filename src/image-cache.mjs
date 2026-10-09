@@ -1,7 +1,8 @@
-import { openSync, readSync, closeSync, statSync, readFileSync } from 'node:fs';
+import { openSync, readSync, closeSync, statSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
 
@@ -51,13 +52,18 @@ export function verifyOCI(directory, image, platform) {
   return manifest.config.digest;
 }
 
-export function restoreOCI(directory, image, platform, command) {
+export function restoreOCI(directory, image, platform, command, transfer = execFileSync) {
   const id = verifyOCI(directory, image, platform);
   try { command(['image', 'inspect', id]); }
   catch (error) {
     if (!/No such image/i.test(error.message)) throw error;
-    const endpoint = command(['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}']);
-    execFileSync('skopeo', ['copy', '--dest-daemon-host', endpoint, `oci:${directory}:localcloud`, `docker-daemon:localcloud-cache:${image.split('@')[1].slice(7)}`], {stdio:['ignore','ignore','pipe'], timeout:600_000, maxBuffer:8*1024*1024});
+    const temporary = mkdtempSync(join(tmpdir(), 'localcloud-image-import-'));
+    try {
+      const archive = join(temporary, 'image.tar');
+      // Docker's own client preserves remote contexts, TLS settings and credentials.
+      transfer('skopeo', ['copy', `oci:${directory}:localcloud`, `docker-archive:${archive}:localcloud-cache:${image.split('@')[1].slice(7)}`], {stdio:['ignore','ignore','pipe'], timeout:600_000, maxBuffer:8*1024*1024});
+      command(['image', 'load', '--input', archive]);
+    } finally { rmSync(temporary, {recursive:true, force:true}); }
   }
   return id;
 }

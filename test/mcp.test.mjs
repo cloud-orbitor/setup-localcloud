@@ -62,3 +62,24 @@ test('stdio forwards a server callback and its client response while the request
   child.stdin.write('{"jsonrpc":"2.0","id":2,"method":"slow"}\n');
   assert.equal((await completed).result.ok,true);child.stdin.end();
 });
+
+test('saturated request slots still allow cancellation control messages', {timeout:10000}, async t => {
+  const waiting=[];
+  const server=createServer((req,res)=>{let body='';req.on('data',chunk=>body+=chunk);req.on('end',()=>{
+    const message=JSON.parse(body);
+    if(message.method==='slow') {
+      waiting.push({res,id:message.id});
+      if(waiting.length===64)child.stdin.write('{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}\n');
+    } else {
+      assert.equal(message.method,'notifications/cancelled');res.writeHead(202);res.end();
+      for(const request of waiting) {request.res.setHeader('Content-Type','application/json');request.res.end(JSON.stringify({jsonrpc:'2.0',id:request.id,result:{cancelled:true}}));}
+    }
+  });});
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  const child=spawn(process.execPath,[fileURLToPath(new URL('../src/mcp-stdio.mjs',import.meta.url))],{env:{...process.env,LOCALCLOUD_MCP_CONNECTION:JSON.stringify({url:`http://127.0.0.1:${server.address().port}`,project:'ci-project',ports:{}})}});
+  t.after(()=>{child.kill();server.closeAllConnections();server.close();});
+  let buffer='',count=0;
+  const completed=new Promise(resolve=>child.stdout.on('data',bytes=>{buffer+=bytes.toString();let end;while((end=buffer.indexOf('\n'))!==-1){const response=JSON.parse(buffer.slice(0,end));buffer=buffer.slice(end+1);assert.equal(response.result?.cancelled,true);if(++count===64)resolve();}}));
+  for(let id=1;id<=64;id++)child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method:'slow'})+'\n');
+  await completed;child.stdin.end();
+});

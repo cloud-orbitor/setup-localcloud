@@ -53,7 +53,7 @@ async function main() {
     try {
       message=JSON.parse(line);
       if(!message || message.jsonrpc!=='2.0' || (typeof message.method!=='string' && !(Object.hasOwn(message,'id') && (Object.hasOwn(message,'result') || Object.hasOwn(message,'error')))))throw Error('Invalid MCP message');
-      if(pending.size>=64)throw Error('Too many concurrent MCP requests');
+      if(pending.size>=64 && typeof message.method==='string' && Object.hasOwn(message,'id'))throw Error('Too many concurrent MCP requests');
       const result=await forward(message,connection,emit);
       if(result)emit(result);
     } catch(error) {

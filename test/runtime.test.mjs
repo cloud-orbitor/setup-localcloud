@@ -56,7 +56,8 @@ test('owned Docker startup records actual ports and recovers publication failure
       const calls=[];let owner='';const id='b'.repeat(64);const stateFile=join(dir,String(broken));
       const command=args=>{
         calls.push(args);
-        if(args[0]==='image') return JSON.stringify([{Config:{ExposedPorts:{'5380/tcp':{},'5382/tcp':{}}}}]);
+        if(args[0]==='version') return '{"Os":"linux","Arch":"amd64"}';
+        if(args[0]==='image') return JSON.stringify([{Id:'sha256:'+'a'.repeat(64),Os:'linux',Architecture:'amd64',Config:{ExposedPorts:{'5380/tcp':{},'5382/tcp':{}}}}]);
         if(args[0]==='run') { owner=args[args.indexOf('--label')+1].split('=')[1];return id; }
         if(args[0]==='inspect') return JSON.stringify([{Id:id,Config:{Labels:{'cloud.local.setup-localcloud.owner':owner}},NetworkSettings:{Ports:{'5380/tcp':[{HostIp:broken?'0.0.0.0':'127.0.0.1',HostPort:'6100'}],'5382/tcp':[{HostIp:'127.0.0.1',HostPort:'6102'}]}}}]);
         return '';

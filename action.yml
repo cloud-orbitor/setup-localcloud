@@ -8,6 +8,8 @@ inputs:
   image:
     description: LocalCloud image pinned to an immutable digest. Used when starting a container.
     default: agentcloud/localcloud@sha256:88e85b86b294e1e4f71b8c63ec43de79d170946ff39556f0e2709f66aa0d368c
+  image-cache:
+    description: Optional restored OCI image layout created by scripts/image-cache.mjs. The pinned source and platform are verified before use.
   services:
     description: Comma-separated service IDs. The release profile is gcs,pubsub,bigquery.
     default: gcs,pubsub,bigquery

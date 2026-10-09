@@ -2,6 +2,7 @@ import { appendFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
+import { restoreOCI } from './image-cache.mjs';
 
 export const DEFAULT_IMAGE = 'agentcloud/localcloud@sha256:88e85b86b294e1e4f71b8c63ec43de79d170946ff39556f0e2709f66aa0d368c';
 const OWNER_LABEL = 'cloud.local.setup-localcloud.owner';
@@ -26,7 +27,7 @@ export function options(env = process.env) {
     if (parsed.port !== '5380' || parsed.protocol !== 'http:') throw new Error('Existing runtime must use http://<host>:5380 with canonical service ports; omit runtime-url for automatic Docker port mapping');
     url = parsed.origin;
   }
-  return { services, project, seconds, image, url };
+  return { services, project, seconds, image, url, imageCache:get('image-cache') };
 }
 
 export function docker(args) {
@@ -42,13 +43,50 @@ export function githubFile(file, key, value) {
   if (file) appendFileSync(file, `${key}=${value}\n`);
 }
 
+export function acquireImage(config, command = docker) {
+  const server = JSON.parse(command(['version', '--format', '{{json .Server}}']));
+  const platform = {os:server.Os, architecture:server.Arch};
+  if (platform.os !== 'linux' || !platform.architecture) throw Error('LocalCloud requires a Linux Docker server with a known architecture');
+  let reference = config.image;
+  let inspected;
+  try { inspected = command(['image', 'inspect', reference]); }
+  catch (error) {
+    if (!/No such image/i.test(error.message)) throw error;
+    if (config.imageCache) {
+      try {
+        reference = restoreOCI(config.imageCache, config.image, platform, command);
+        inspected = command(['image', 'inspect', reference]);
+      } catch (cacheError) {
+        console.error(`LocalCloud image cache unavailable; using pinned registry image: ${cacheError.message.slice(0,300)}`);
+        reference = config.image;
+      }
+    }
+    if (!inspected) {
+      try { command(['pull', config.image]); }
+      catch (pullError) {
+        const guidance = /toomanyrequests|rate.?limit|429/i.test(pullError.message)
+          ? 'Registry limit reached. Configure registry credentials before setup or use a verified mirror; retrying immediately will not reset a quota.'
+          : /unauthorized|authentication|denied/i.test(pullError.message)
+            ? 'Registry authentication failed. Check docker login credentials and access to the requested image.'
+            : 'Image acquisition failed before LocalCloud startup. Check registry connectivity and the pinned digest.';
+        throw new Error(`${guidance}\n${pullError.message}`, {cause:pullError});
+      }
+      inspected = command(['image', 'inspect', config.image]);
+    }
+  }
+  const image = JSON.parse(inspected)[0];
+  if (!image || !/^sha256:[a-f0-9]{64}$/.test(image.Id || '') || !image.Config) throw Error('Invalid Docker image inspection');
+  if (image.Os !== platform.os || image.Architecture !== platform.architecture) throw Error(`LocalCloud image platform ${image.Os}/${image.Architecture} does not match Docker ${platform.os}/${platform.architecture}`);
+  if (reference.startsWith('sha256:') && image.Id !== reference) throw Error('Loaded image configuration digest mismatch');
+  return {image, reference};
+}
+
 export function startRuntime(config, { command = docker, stateFile = process.env.GITHUB_STATE } = {}) {
   // shortcut: connect mode uses canonical ports, add explicit port maps when custom external publication is needed.
   if (config.url) return { url: config.url, ports: { '5380': Number(new URL(config.url).port || (config.url.startsWith('https:') ? 443 : 80)) }, record: null };
   if (process.platform !== 'linux' && !process.env.LOCALCLOUD_ACTION_LOCAL_TEST) throw new Error('Starting LocalCloud requires a Linux Docker runner; use runtime-url to connect to an existing runtime');
   const owner = randomUUID();
-  command(['pull', config.image]);
-  const image = JSON.parse(command(['image', 'inspect', config.image]))[0];
+  const {image, reference} = acquireImage(config, command);
   const ports = Object.keys(image.Config.ExposedPorts || {}).filter(p => /^\d+\/tcp$/.test(p)).map(p => Number(p.split('/')[0]));
   if (!ports.includes(5380) || ports.length > 100 || ports.some(p => p < 1 || p > 65535)) throw new Error('Image must expose the LocalCloud gateway on 5380/tcp');
   const name = `localcloud-ci-${owner}`;
@@ -58,7 +96,7 @@ export function startRuntime(config, { command = docker, stateFile = process.env
   const args = ['run', '-d', '--pull', 'never', '--name', name, '--label', `${OWNER_LABEL}=${owner}`, '--memory', '4g', '-e', `LOCALCLOUD_SERVICES=${config.services.join(',')}`, '-e', `LOCALCLOUD_PROJECT=${config.project}`, '-e', 'LOCALCLOUD_DOCKER_ACCESS=false', '-e', 'LOCALCLOUD_TELEMETRY=false'];
   for (const port of ports) args.push('-p', `127.0.0.1::${port}`);
   try {
-    const id = command([...args, config.image]);
+    const id = command([...args, reference]);
     record.id = id;
     githubFile(stateFile, 'localcloud_record', JSON.stringify(record));
     const container = JSON.parse(command(['inspect', id]))[0];

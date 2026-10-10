@@ -12,7 +12,12 @@ if (existsSync('.localcloud-cleanup-proof.json')) {
     assert.notEqual(volume.status, 0, 'anonymous volume survived automatic post cleanup');
     assert.match(volume.stderr, /no such volume/i);
   }
-  console.log('Automatic action post hook removed the owned container and anonymous volume');
+  for(const name of proof.networks || []) {
+    const network=spawnSync('docker',['network','inspect',name],{encoding:'utf8'});
+    assert.notEqual(network.status,0,'owned network survived automatic post cleanup');
+    assert.match(network.stderr,/No such network|network .+ not found/i);
+  }
+  console.log('Automatic action post hook removed the owned container, volumes and network');
 } else {
   console.log('No runtime resources were recorded; setup outcome is checked by the preceding steps');
 }

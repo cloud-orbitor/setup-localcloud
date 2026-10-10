@@ -1,8 +1,12 @@
+# GitHub Actions user guide
+
+Built from the LocalCloud site [guide source](https://github.com/LocalGCloud/LocalGCloud.github.io/pull/5). Website publication awaits that pull request; this repository copy is available now.
+
 # LocalCloud in GitHub Actions
 
 > Run Google Cloud integration tests and AI-agent checks in GitHub workflows using the LocalCloud Docker image, with or without the setup action.
 >
-> Built from the LocalCloud site's [GitHub Actions guide source](https://github.com/LocalGCloud/LocalGCloud.github.io/pull/5). Website publication awaits that pull request; this repository copy is available now.
+> Source: https://local.cloud/docs/github-actions/
 
 Run your Google Cloud application tests against a LocalCloud Docker environment in a GitHub Actions job. Your application uses standard Google Cloud SDKs with local endpoint settings. Use this for pull-request checks, continuous integration, staging-like application tests, or an AI coding agent that needs a cloud environment while it works.
 
@@ -16,7 +20,7 @@ LocalCloud runs independently as a Docker image. The [Setup LocalCloud action](h
 | GitHub service container plus setup action | GitHub | The action connects to your service | GitHub |
 | GitHub service container without setup action | GitHub | Your workflow reads the runtime settings | GitHub |
 
-All examples below run application code on an Ubuntu VM runner. The image has a 4 GiB memory limit; allow additional memory and disk for your application. Automatic setup currently targets Linux Docker runners. A job with `container:` uses different networking and needs separate workflow tests; see [container jobs](#container-jobs-and-running-code-inside-the-image).
+All examples below run application code on an Ubuntu VM runner. The image has a 4 GiB memory limit; allow additional memory and disk for your application. Automatic setup currently targets Linux Docker runners. A job with `container:` uses different networking and needs separate workflow tests; see [container jobs](https://local.cloud/docs/github-actions/#container-jobs-and-running-code-inside-the-image).
 
 ## Quick start: run a pull-request test
 
@@ -328,7 +332,62 @@ credentials:
 
 GitHub documents [service-container registry authentication](https://docs.github.com/en/actions/tutorials/use-containerized-services/use-docker-service-containers#authenticating-with-image-registries). A registry mirror and reliable anonymous CI distribution are being gathered in the [action backlog](https://github.com/cloud-orbitor/setup-localcloud/issues).
 
-## Tested workflows and support
+## Preview: image reuse, container applications and MCP
+
+The integration updates below are available on the action’s `codex/ci-runtime-reliability` branch while the next release is prepared. The published `v0.1.0` workflows above remain usable. Pin a reviewed commit when testing the preview; these inputs are not present in `v0.1.0`.
+
+```yaml
+- name: Start the CI environment
+  id: localcloud
+  uses: cloud-orbitor/setup-localcloud@codex/ci-runtime-reliability
+  with:
+    services: gcs,pubsub,bigquery
+    project-id: localcloud-ci
+    mcp: 'true'
+```
+
+| Preview input | Usage |
+| --- | --- |
+| `image-cache` | Path to a restored OCI image layout. The action verifies the requested digest, selected platform and image blobs before importing it. Omit for ordinary Docker image reuse. |
+| `port-map` | JSON canonical-to-published port mapping for an existing HTTP runtime, such as `{"5380":15380,"5382":15382,"5383":15383,"5388":15388}` with `runtime-url: http://127.0.0.1:15380`. Include every selected endpoint that uses a remapped listener. |
+| `docker-access` | Explicitly set `'true'` for native Dataproc, Cloud Run or GKE execution. This mounts the runner’s Docker socket and grants the runtime Docker host access. Keep it off for ordinary SDK tests. The runtime reports its own prerequisite requirements. |
+| `mcp` | Set `'true'` to generate a job-local read-only MCP configuration attached to this runtime and project. No CLI or second runtime is installed. |
+
+### Reduce image pulls
+
+The preview checks for the exact pinned image and platform locally before pulling. Persistent Docker runners can reuse that image across jobs; each job still creates fresh application state. Standard GitHub-hosted runners start fresh, so they need a restored cache or registry distribution for reuse across jobs.
+
+For an optional cache, install Skopeo on the runner, restore an OCI layout with `actions/cache/restore`, and pass its directory through `image-cache`. Create a trusted cache with the action repository’s `scripts/image-cache.mjs`, using the pinned image and architecture. Keep an exact cache key containing the image identity, digest, OS, architecture and format version. Do not cache Docker credentials, daemon state or LocalCloud data volumes. Cache restore, integrity checking and image import take time and disk space; measure them before enabling caching everywhere.
+
+Native `services:` and job-container images are pulled before workflow steps, so an ordinary cache or login step cannot intercept that initial pull. Configure service registry credentials or a verified registry mirror for those routes. The repository’s mirror workflow preserves image digests and all platforms; a mirror must be published and tested before using its address.
+
+Group tests that can share one environment into a single job and cancel superseded PR workflows. Preserve test isolation between independent jobs. Selecting fewer services reduces startup and resource use; it does not make the same Docker image smaller. Fork PR workflows do not receive ordinary repository secrets, so use a public image or a trusted restore-only cache for those tests.
+
+### Run an application container
+
+The preview exports `network` and `docker-env-file` outputs for its owned runtime. Start an application container on that network and pass the environment file:
+
+```yaml
+- name: Test an application image
+  env:
+    LOCALCLOUD_NETWORK: ${{ steps.localcloud.outputs.network }}
+    LOCALCLOUD_ENV_FILE: ${{ steps.localcloud.outputs.docker-env-file }}
+  run: docker run --rm --network "$LOCALCLOUD_NETWORK" --env-file "$LOCALCLOUD_ENV_FILE" my-application-tests
+```
+
+These settings use internal service names and ports instead of the runner’s loopback addresses. Build your application image with its dependencies. For code running inside the LocalCloud image, keep the startup entrypoint and use `docker exec` after readiness. Its bundled Python environment does not include pip; provision an isolated application environment rather than changing the emulator’s dependencies. The repository’s container checks demonstrate that route.
+
+The action removes its owned runtime, data volume, execution children and network after the job. Use `--rm` and your own failure cleanup for application containers you launch. Existing runtimes remain their owner’s responsibility. On interrupted self-hosted runners, use the ownership labels and job receipt to identify that job’s resources; avoid broad Docker pruning.
+
+### Attach an MCP client
+
+With `mcp: 'true'`, pass `steps.localcloud.outputs.mcp-config` to a client supporting a `mcpServers` configuration. The generated stdio bridge targets the same gateway and project as the SDK environment. It leaves global client settings untouched and keeps runtime MCP writes and destructive operations disabled; ordinary SDK writes are governed separately by the application’s client configuration and runtime IAM mode.
+
+For native container jobs, use the service-name gateway and explicitly permit MCP traffic on that isolated job network in the service environment with `LOCALCLOUD_MCP_ALLOW_REMOTE: 'true'`. Keep both `LOCALCLOUD_MCP_WRITE` and `LOCALCLOUD_MCP_DESTRUCTIVE` false. Do not expose that service publicly.
+
+The preview’s checks cover SDK operations on the runner and in application containers, service-catalog configuration, real MCP client discovery/query and owned cleanup. Follow the [action evidence ledger](https://github.com/cloud-orbitor/setup-localcloud/blob/main/docs/release-evidence.md) for the tested revision and any runtime-specific limits.
+
+## Workflow evidence and support
 
 The action’s [evidence ledger](https://github.com/cloud-orbitor/setup-localcloud/blob/main/docs/release-evidence.md) records exact action/image identities, SDK versions, tested workflows, and automatic cleanup checks. The Storage/Pub/Sub/BigQuery examples demonstrate a small application profile. Other service workflows need checks for the operations your application uses; the full catalog remains available for service selection.
 

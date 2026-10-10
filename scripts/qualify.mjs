@@ -7,19 +7,24 @@ import { options, startRuntime, configure, cleanup, docker, jobFiles } from '../
 const flags=new Set(process.argv.slice(2));
 if(flags.has('--local'))process.env.LOCALCLOUD_ACTION_LOCAL_TEST='1';
 const config=options({...process.env, ...(flags.has('--mcp')?{INPUT_MCP:'true'}:{})});
+const cache=[...flags].find(flag=>flag.startsWith('--image-cache='))?.slice('--image-cache='.length);
+if(cache)config.imageCache=cache;
+const candidate=[...flags].find(flag=>flag.startsWith('--candidate-image='))?.slice('--candidate-image='.length);
+if(candidate) {if(!flags.has('--local') || !/^sha256:[a-f0-9]{64}$/.test(candidate))throw Error('Local candidate qualification requires --local and an immutable sha256 image ID');config.image=candidate;}
 const execution=[...flags].find(flag=>flag.startsWith('--execution='))?.split('=')[1];
 if(execution) {if(!['cloudrun','dataproc','gke'].includes(execution))throw Error('Unknown execution qualification profile');config.services=[...new Set([...config.services,execution])];config.dockerAccess=true;}
 const report={image:config.image, services:config.services, project:config.project, platform:JSON.parse(docker(['version','--format','{{json .Server}}'])), checks:{}, started:new Date().toISOString()};
 const python=process.env.LOCALCLOUD_TEST_PYTHON || 'python';
 const output=process.env.LOCALCLOUD_QUALIFICATION_REPORT || '.local-test/qualification.json';
 let runtime;
+const acquisition=args=>{if(flags.has('--offline-cache') && args[0]==='pull')throw Error('Cache qualification forbids registry pulls');return docker(args);};
 const run=(command,args,env=process.env)=>{
   const result=spawnSync(command,args,{env,stdio:'inherit',timeout:600_000});
   if(result.error)throw result.error;
   if(result.status!==0)throw Error(`${command} qualification failed with exit ${result.status}`);
 };
 try {
-  runtime=startRuntime(config);
+  runtime=startRuntime(config,{command:acquisition});
   let env=await configure(config,runtime);
   if(flags.has('--catalog')) {
     config.services=runtime.catalog.filter(service=>service.id!=='firestore' && service.coverage_status!=='unsupported' && service.availability!=='unavailable' && service.startable!==false && !(service.runtime_dependencies || []).some(d=>d.required)).map(service=>service.id).sort();
@@ -33,7 +38,7 @@ try {
   const files=jobFiles(config,runtime,env);
   run(python,['examples/python-smoke.py'],{...process.env,...env});report.checks.sdk='passed';
   if(config.mcp) {run(python,['examples/mcp-smoke.py'],{...process.env,...env,LOCALCLOUD_MCP_CONFIG:files.mcpConfig});report.checks.mcp='passed';}
-  if(execution) {run(python,['examples/execution-smoke.py',execution],{...process.env,...env,LOCALCLOUD_SOURCE_IMAGE:runtime.imageReference});report.checks[execution+'_execution']='passed';}
+  if(execution) {run(python,['examples/execution-smoke.py',execution],{...process.env,...env,LOCALCLOUD_SOURCE_IMAGE:runtime.imageReference,LOCALCLOUD_TEST_VOLUME:runtime.record.volume});report.checks[execution+'_execution']='passed';}
   if(flags.has('--container-app')) {
     docker(['exec',runtime.record.id,'mkdir','-p','/tmp/ci-examples']);
     docker(['cp','examples/.',`${runtime.record.id}:/tmp/ci-examples`]);

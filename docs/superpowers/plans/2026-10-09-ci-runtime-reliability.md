@@ -77,3 +77,7 @@ git diff --check
 - [ ] Update the website's canonical guide and generated repository copy; run Node 24.21.0/pnpm 12.9.1 serial production build, then installer verification and `graft build`.
 - [ ] Record exact action SHA/image/platform, passing and blocked tests, and residual requirements for every issue. Prepare consolidated release notes without publishing.
 - [ ] Obtain final independent review, push the local branch using only `cloud-orbitor`, create and attach a PR, and link evidence to all seven issues. Leave issues with unmet runtime/external acceptance criteria open.
+
+## Execution status
+
+Tasks 1 and 2 are implemented and source-reviewed; 30 Node tests and the local SDK/MCP/container/catalog checks pass. Cloud Run and GKE native execution pass. Dataproc Spark passes, but its published-image SDK deletion needs the separately prepared runtime fix. Task 3 source, workflows and documentation are prepared; final review, hosted evidence, OCI transport measurement and PR creation are being completed. Mirror publication and private runtime PR access remain owner decisions.

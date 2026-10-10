@@ -33,3 +33,18 @@ The qualification used Python 3.12 with Storage 3.6.0, Pub/Sub 2.33.0 and Firest
 [v0.1.0 is publicly released](https://github.com/cloud-orbitor/setup-localcloud/releases/tag/v0.1.0), pinned to commit `de6d236db036be4c8b96879392d22a1feb5047c6`. [Release-tag consumer run 37982317639](https://github.com/cloud-orbitor/setup-localcloud/actions/runs/37982317639) passed all three SDK readbacks and actual automatic post cleanup using `cloud-orbitor/setup-localcloud@v0.1.0`.
 
 A repository release is separate from Marketplace publication. The owner completed the agreement and account requirements, and [Setup LocalCloud is listed in Marketplace](https://github.com/marketplace/actions/setup-localcloud) at v0.1.0. The v0.1.1 draft remains unpublished while the [consolidated release backlog](https://github.com/cloud-orbitor/setup-localcloud/issues/5) is reviewed. Service selection through the `services` input does not require another action release.
+
+
+## Consolidated implementation candidate (2026-10-09)
+
+Branch `codex/ci-runtime-reliability` implements issues #1–#7; see the implementation plan and issue-resolution table. No action tag or Marketplace release was published.
+
+Local Node 24.21.0 checks: 30 tests pass, including exact-image reuse, platform selection, OCI integrity, prerequisite/unsupported-service rejection, remapped endpoints, ownership recovery, native MCP JSON/SSE forwarding, callbacks and saturated cancellation. Independent source review approved image acquisition and runtime/MCP corrections.
+
+Pinned image `agentcloud/localcloud@sha256:88e85b86b294e1e4f71b8c63ec43de79d170946ff39556f0e2709f66aa0d368c`, linux/arm64, cached store: 21 selected non-Firestore/non-execution services passed catalog/readiness/environment checks. This is environment qualification, not a claim that every service operation or language SDK was exercised. Python Storage 3.6.0, Pub/Sub 2.33.0 and BigQuery 3.46.1 passed resource write/readback and cleanup. SDK checks also passed inside the runtime and in a separate application container on its owned network.
+
+Python MCP SDK 1.26.0 passed initialize, tools/resources discovery, SDK environment targeting the same gateway/project and SELECT 1 through the action's stdio bridge. Native Cloud Run (Python SDK 0.16.2) passed deployment and actual HTTP readback. GKE (Python SDK 2.67.0) passed cluster lifecycle, native Kubernetes API, ready node and native pod execution. Owned root/network/volume cleanup passed.
+
+Dataproc (Python SDK 5.31.0) passed cluster creation and a native Spark job. The published runtime's delete LRO omits the protobuf Empty response and triggers a Google SDK future error. A separately prepared runtime correction (`60e1707b826b75ced1dc54f1af5be41bf7d2f9bf`) passes all eight Dataproc service tests, including the regression that failed before the fix. It is not a published image; cloud-orbitor currently lacks private runtime-repository access. The native qualification script now treats SDK deletion errors as failures rather than hiding them.
+
+The website guide production build (Node 24.21.0/pnpm 12.9.1), installer checks and context refresh passed. The repository guide is regenerated from its rendered Markdown twin. Website publication remains in site PR #5. Optional cache transport benchmarks and fresh hosted runs are recorded separately when available; local cached startup does not prove fresh registry pulls. Public mirror publication is pending the owner's decision, and no unverified mirror replaces the default.

@@ -82,14 +82,17 @@ elif profile == 'dataproc':
             time.sleep(2)
             job = jobs.get_job(project_id=project, region='us-central1', job_id=job.reference.job_id, timeout=30)
         assert job.status.state == dataproc_v1.JobStatus.State.DONE, job.status
-        print('Dataproc: SDK cluster lifecycle and native Spark job passed')
+        print('Dataproc: SDK cluster creation and native Spark job passed')
     finally:
+        deletion_error = None
         if created:
             try: controller.delete_cluster(project_id=project, region='us-central1', cluster_name=name, timeout=30).result(timeout=180)
-            except Exception as error: print('Dataproc deletion:', error, file=sys.stderr)
+            except Exception as error: deletion_error = error
         try: bucket.delete(force=True)
         except Exception: pass
         objects.close(); controller.transport.close(); jobs.transport.close()
+        if deletion_error:
+            raise RuntimeError('Dataproc SDK deletion failed; a corrected runtime image is required') from deletion_error
 elif profile == 'gke':
     from google.cloud import container_v1
     from google.cloud.container_v1.services.cluster_manager.transports.grpc import ClusterManagerGrpcTransport
@@ -109,7 +112,17 @@ elif profile == 'gke':
         cluster = client.get_cluster(name=f'{location}/clusters/{name}', timeout=30)
         assert cluster.status == container_v1.Cluster.Status.RUNNING, cluster.status
         assert cluster.endpoint, 'Native Kubernetes API endpoint missing'
-        print('GKE: SDK cluster lifecycle and native k3d control plane passed')
+        servers = docker('ps', '-q', '--no-trunc', '--filter', 'label=com.localcloud.volume-name=' + os.environ['LOCALCLOUD_TEST_VOLUME'], '--filter', 'label=localcloud.service=gke').splitlines()
+        assert len(servers) == 1, servers
+        node = servers[0]
+        version = json.loads(docker('exec', node, 'kubectl', 'get', '--raw', '/version'))
+        assert version['gitVersion'].startswith('v'), version
+        docker('exec', node, 'kubectl', 'wait', '--for=condition=Ready', 'node', '--all', '--timeout=90s')
+        cached = docker('exec', node, 'ctr', '-n', 'k8s.io', 'images', 'ls', '-q').splitlines()
+        pause = next((image for image in cached if '/mirrored-pause' in image or '/pause' in image), 'registry.k8s.io/pause@sha256:ee6521f290b2168b6e0935a181d4cff9be1ac3f505666ef0e3c98fae8199917a')
+        docker('exec', node, 'kubectl', 'run', name, '--image=' + pause, '--image-pull-policy=IfNotPresent', '--restart=Never')
+        docker('exec', node, 'kubectl', 'wait', '--for=condition=Ready', 'pod/' + name, '--timeout=90s')
+        print('GKE: SDK lifecycle, native Kubernetes API, ready node and native pod execution passed')
     finally:
         if created:
             try: client.delete_cluster(name=f'{location}/clusters/{name}', timeout=30)

@@ -1,6 +1,7 @@
 name: Qualify LocalCloud action
 on:
   push:
+    branches: [main]
     paths:
       - action.yml
       - src/**
@@ -19,6 +20,21 @@ on:
       - .github/workflows/qualify.yml
       - .github/**
   workflow_dispatch:
+    inputs:
+      image:
+        description: Immutable runtime image to qualify
+        default: agentcloud/localcloud@sha256:88e85b86b294e1e4f71b8c63ec43de79d170946ff39556f0e2709f66aa0d368c
+      native_execution:
+        description: Also run Dataproc, Cloud Run and GKE workload checks
+        type: boolean
+        default: false
+      publish_mirror:
+        description: Explicitly publish the digest-preserving runtime mirror
+        type: boolean
+        default: false
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -29,7 +45,70 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24'
-      - run: node --test test/runtime.test.mjs
+      - run: node --test
+  publish-mirror:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_mirror
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/mirror.yml
+  profiles:
+    needs: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [mcp, container-app, catalog]
+    env:
+      INPUT_IMAGE: ${{ inputs.image || 'agentcloud/localcloud@sha256:88e85b86b294e1e4f71b8c63ec43de79d170946ff39556f0e2709f66aa0d368c' }}
+      INPUT_SERVICES: gcs,pubsub,bigquery
+      LOCALCLOUD_QUALIFICATION_REPORT: .local-test/${{ matrix.profile }}.json
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -r examples/requirements.txt -r examples/mcp-requirements.txt
+      - run: node scripts/qualify.mjs --${{ matrix.profile }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: ${{ matrix.profile }}-evidence
+          path: .local-test/*.json
+          include-hidden-files: true
+  execution:
+    if: github.event_name == 'workflow_dispatch' && inputs.native_execution
+    needs: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [cloudrun, dataproc, gke]
+    env:
+      INPUT_IMAGE: ${{ inputs.image }}
+      INPUT_SERVICES: gcs,pubsub,bigquery
+      LOCALCLOUD_QUALIFICATION_REPORT: .local-test/${{ matrix.profile }}.json
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -r examples/requirements.txt -r examples/execution-requirements.txt
+      - run: node scripts/qualify.mjs --execution=${{ matrix.profile }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: ${{ matrix.profile }}-execution-evidence
+          path: .local-test/*.json
+          include-hidden-files: true
   managed:
     needs: unit
     runs-on: ubuntu-24.04
@@ -42,6 +121,9 @@ jobs:
       - uses: ./.github/assert-cleanup
       - id: cloud
         uses: ./
+        with:
+          services: gcs,pubsub,bigquery
+          image: ${{ inputs.image || 'agentcloud/localcloud@sha256:88e85b86b294e1e4f71b8c63ec43de79d170946ff39556f0e2709f66aa0d368c' }}
       - run: pip install -r examples/requirements.txt
       - run: python examples/python-smoke.py
       - name: Record owned resources for automatic post verification
@@ -81,6 +163,37 @@ jobs:
       - name: Existing runtime was preserved
         if: always()
         run: curl --fail --silent 'http://127.0.0.1:5380/readiness?services=gcs,pubsub,bigquery'
+  container-job:
+    needs: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    container: mcr.microsoft.com/devcontainers/python:1-3.13-bookworm
+    services:
+      localcloud:
+        image: ${{ inputs.image || 'agentcloud/localcloud@sha256:88e85b86b294e1e4f71b8c63ec43de79d170946ff39556f0e2709f66aa0d368c' }}
+        env:
+          LOCALCLOUD_SERVICES: gcs,pubsub,bigquery
+          LOCALCLOUD_PROJECT: container-ci
+          LOCALCLOUD_TELEMETRY: 'false'
+          LOCALCLOUD_DOCKER_ACCESS: 'false'
+          LOCALCLOUD_MCP_WRITE: 'false'
+          LOCALCLOUD_MCP_DESTRUCTIVE: 'false'
+          LOCALCLOUD_MCP_ALLOW_REMOTE: 'true'
+        options: --memory 4g
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: ./
+        id: cloud
+        with:
+          runtime-url: http://localcloud:5380
+          project-id: container-ci
+          services: gcs,pubsub,bigquery
+          mcp: 'true'
+      - run: python -m pip install -r examples/requirements.txt -r examples/mcp-requirements.txt
+      - run: python examples/python-smoke.py
+      - run: python examples/mcp-smoke.py
+        env:
+          LOCALCLOUD_MCP_CONFIG: ${{ steps.cloud.outputs.mcp-config }}
   rejected-service:
     needs: unit
     runs-on: ubuntu-24.04

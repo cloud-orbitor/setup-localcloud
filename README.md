@@ -6,6 +6,8 @@ Run Google Cloud application tests and AI-agent checks against the LocalCloud Do
 
 ## Quick start
 
+The published example uses `v0.1.0`. The consolidated update is being reviewed on `codex/ci-runtime-reliability`; its implementation and checks are mapped to all seven issues in [the resolution table](docs/issue-resolution.md) and [implementation plan](docs/superpowers/plans/2026-10-09-ci-runtime-reliability.md).
+
 Save this as `.github/workflows/localcloud.yml`. It uses the already-published action with explicit service selection and verifies a local BigQuery query:
 
 ```yaml
@@ -98,6 +100,8 @@ This table is copied from the site-rendered guide. Follow each service guide for
 
 ## Runtime and lifecycle
 
+The following describes published `v0.1.0`; the preview features below extend its networking, execution and MCP configuration.
+
 - Pin the action to the full commit shown on its [release page](https://github.com/cloud-orbitor/setup-localcloud/releases/tag/v0.1.0) for immutable action identity. The runtime image is independently pinned by digest; use the `image` input to select another compatible immutable image.
 - Automatic mode requires a Linux Docker runner, gives LocalCloud a 4 GiB limit, publishes TCP ports on loopback, and rewrites generated endpoints to those ports.
 - For a native service or independently started image, supply `runtime-url: http://host:5380` and canonical service ports. The runtime owner retains lifecycle control. The [full guide](docs/github-actions.md#use-the-image-without-the-action-or-cli) also shows setup without this action or the CLI.
@@ -114,4 +118,28 @@ Report integration problems in [this repository's issues](https://github.com/clo
 
 ## Development and checks
 
-Use Node 24 and `node --test test/runtime.test.mjs`. There are no npm runtime dependencies or generated bundles. [Guide checks](.github/workflows/guide.yml) exercise the documented published-action quick start and Docker-only bootstrap. [Consumer checks](.github/workflows/consumer.yml) exercise SDK readback and actual automatic cleanup using the published action commit and explicit BigQuery selection. Exact run evidence lives in [docs/release-evidence.md](docs/release-evidence.md).
+Use Node 24 and `node --test`. There are no npm runtime dependencies or generated bundles. [Guide checks](.github/workflows/guide.yml) exercise the documented published-action quick start and Docker-only bootstrap. [Consumer checks](.github/workflows/consumer.yml) exercise the published action. Candidate checks cover catalog configuration, runner/application-container SDKs, native execution, MCP and cleanup; optional cache and mirror workflows are explicitly dispatched. Exact run evidence lives in [docs/release-evidence.md](docs/release-evidence.md).
+
+## Preview inputs and outputs
+
+These features require the reviewed preview branch or its commit, not the published `v0.1.0` tag:
+
+```yaml
+- uses: cloud-orbitor/setup-localcloud@codex/ci-runtime-reliability
+  id: localcloud
+  with:
+    services: gcs,pubsub,bigquery
+    project-id: localcloud-ci
+    mcp: 'true'
+```
+
+| Input | Purpose |
+| --- | --- |
+| `image-cache` | Optional restored OCI layout. The pinned root, platform, config and layers are verified before importing; otherwise use the Docker store or registry. |
+| `port-map` | Existing-runtime canonical-to-published JSON port mapping. For `runtime-url: http://127.0.0.1:15380`, use `'{"5380":15380,"5382":15382,"5383":15383,"5388":15388}'` for the example profile. |
+| `docker-access` | Default `'false'`; opt in to runner Docker socket access for native execution. Runtime prerequisites come from the image catalog. |
+| `mcp` | Default `'false'`; create a job-local read-only MCP configuration attached to this gateway/project. No CLI installation. |
+
+Outputs include `network`, `env-file`, `docker-env-file`, `mcp-url` and `mcp-config`, in addition to the gateway/container/project outputs. Use `docker-env-file` and the owned `network` when launching an application container; host loopback settings do not work inside it. The full guide explains the preview, lifecycle ownership and per-client SDK configuration.
+
+Image reuse keeps application state fresh. Persistent runners reuse the exact local image; standard hosted runners need a restored image cache or registry delivery across jobs. Native services start before cache/login steps. The opt-in [cache workflow](.github/workflows/cache.yml) demonstrates trusted cache production and restoration; benchmark disk usage and load time before enabling it everywhere. The [mirror workflow](.github/workflows/mirror.yml) preserves all source platforms/digests and must be published and anonymously verified before use as a public default.

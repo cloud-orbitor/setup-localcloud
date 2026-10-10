@@ -1,0 +1,35 @@
+name: Mirror the pinned LocalCloud runtime
+on:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  mirror:
+    if: github.repository == 'cloud-orbitor/setup-localcloud'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SOURCE_IMAGE: agentcloud/localcloud@sha256:88e85b86b294e1e4f71b8c63ec43de79d170946ff39556f0e2709f66aa0d368c
+      DESTINATION_IMAGE: ghcr.io/cloud-orbitor/localcloud:sha-88e85b86b294e1e4f71b8c63ec43de79d170946ff39556f0e2709f66aa0d368c
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Install the OCI transport
+        run: sudo apt-get update && sudo apt-get install -y skopeo
+      - name: Authenticate without writing credentials to a cache
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$REGISTRY_TOKEN" | skopeo login --authfile "$RUNNER_TEMP/registry-auth.json" --username "$GITHUB_ACTOR" --password-stdin ghcr.io
+      - name: Copy all platforms and preserve source digests
+        run: skopeo copy --all --preserve-digests --authfile "$RUNNER_TEMP/registry-auth.json" "docker://$SOURCE_IMAGE" "docker://$DESTINATION_IMAGE"
+      - name: Verify the destination manifest against the pinned digest
+        run: |
+          skopeo inspect --raw --authfile "$RUNNER_TEMP/registry-auth.json" "docker://$DESTINATION_IMAGE" > "$RUNNER_TEMP/destination-manifest.json"
+          actual=$(sha256sum "$RUNNER_TEMP/destination-manifest.json" | cut -d ' ' -f 1)
+          test "$actual" = "${SOURCE_IMAGE##*@sha256:}"
+          printf 'Digest-preserved mirror: ghcr.io/cloud-orbitor/localcloud@sha256:%s\n' "$actual" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Verify package visibility and anonymous pulls before using this mirror as a public default.\n' >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove temporary registry credentials
+        if: always()
+        run: rm -f "$RUNNER_TEMP/registry-auth.json"

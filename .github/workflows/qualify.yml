@@ -32,6 +32,10 @@ on:
         description: Explicitly publish the digest-preserving runtime mirror
         type: boolean
         default: false
+      cache_qualification:
+        description: Qualify OCI restoration on a second fresh runner
+        type: boolean
+        default: false
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -52,6 +56,13 @@ jobs:
       contents: read
       packages: write
     uses: ./.github/workflows/mirror.yml
+  cache:
+    if: github.event_name == 'workflow_dispatch' && inputs.cache_qualification
+    needs: unit
+    uses: ./.github/workflows/cache.yml
+    with:
+      image: ${{ inputs.image }}
+      runner: ubuntu-24.04
   profiles:
     needs: unit
     runs-on: ubuntu-24.04
@@ -137,7 +148,7 @@ jobs:
     timeout-minutes: 15
     services:
       localcloud:
-        image: agentcloud/localcloud@sha256:88e85b86b294e1e4f71b8c63ec43de79d170946ff39556f0e2709f66aa0d368c
+        image: ${{ inputs.image || 'agentcloud/localcloud@sha256:88e85b86b294e1e4f71b8c63ec43de79d170946ff39556f0e2709f66aa0d368c' }}
         env:
           LOCALCLOUD_SERVICES: gcs,pubsub,bigquery
           LOCALCLOUD_PROJECT: native-ci
@@ -167,7 +178,7 @@ jobs:
     needs: unit
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    container: mcr.microsoft.com/devcontainers/python:1-3.13-bookworm
+    container: mcr.microsoft.com/devcontainers/python@sha256:0aa711e570b306c02946cdda67587ce8c65978dbb65691341cbcfd4854dfcfff
     services:
       localcloud:
         image: ${{ inputs.image || 'agentcloud/localcloud@sha256:88e85b86b294e1e4f71b8c63ec43de79d170946ff39556f0e2709f66aa0d368c' }}
@@ -200,15 +211,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - id: rejected
-        continue-on-error: true
-        uses: ./
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          services: unknownservice
-          timeout: '20'
-      - name: Invalid setup failed and its container was removed
+          node-version: '24'
+      - name: Assert catalog rejection before project mutation and verify cleanup
         env:
-          ACTUAL_OUTCOME: ${{ steps.rejected.outcome }}
-        run: |
-          test "$ACTUAL_OUTCOME" = failure
-          test -z "$(docker ps -aq --filter label=cloud.local.setup-localcloud.owner)"
+          INPUT_IMAGE: ${{ inputs.image || 'agentcloud/localcloud@sha256:88e85b86b294e1e4f71b8c63ec43de79d170946ff39556f0e2709f66aa0d368c' }}
+          LOCALCLOUD_QUALIFICATION_REPORT: .local-test/rejected-service.json
+        run: node scripts/qualify.mjs --rejected-service

@@ -36,7 +36,12 @@ try {
   report.catalog=runtime.catalog.map(service=>({id:service.id, selected:config.services.includes(service.id), env_key:service.env_var, dependencies:service.runtime_dependencies, unsupported:service.coverage_status==='unsupported', endpoint_configured:Boolean(env[service.env_var])}));
   report.checks.environment='passed';
   const files=jobFiles(config,runtime,env);
-  run(python,['examples/python-smoke.py'],{...process.env,...env});report.checks.sdk='passed';
+  if(flags.has('--rejected-service')) {
+    await assert.rejects(configure({...config,services:['unknownservice'],project:'rejected-ci-project'},runtime),/Unknown LocalCloud service ID: unknownservice/);
+    const response=await fetch(`${runtime.url}/projects`,{signal:AbortSignal.timeout(5000),redirect:'error'});
+    assert.equal(response.ok,true);const projects=await response.json();assert.equal(projects.some(project=>project.project_id==='rejected-ci-project'),false);
+    report.checks.unknown_service_before_project_mutation='passed';
+  } else {run(python,['examples/python-smoke.py'],{...process.env,...env});report.checks.sdk='passed';}
   if(config.mcp) {run(python,['examples/mcp-smoke.py'],{...process.env,...env,LOCALCLOUD_MCP_CONFIG:files.mcpConfig});report.checks.mcp='passed';}
   if(execution) {run(python,['examples/execution-smoke.py',execution],{...process.env,...env,LOCALCLOUD_SOURCE_IMAGE:runtime.imageReference,LOCALCLOUD_TEST_VOLUME:runtime.record.volume});report.checks[execution+'_execution']='passed';}
   if(flags.has('--container-app')) {

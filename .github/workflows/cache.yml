@@ -1,5 +1,13 @@
 name: Qualify optional OCI image cache
 on:
+  workflow_call:
+    inputs:
+      image:
+        type: string
+        default: agentcloud/localcloud@sha256:88e85b86b294e1e4f71b8c63ec43de79d170946ff39556f0e2709f66aa0d368c
+      runner:
+        type: string
+        default: ubuntu-24.04
   workflow_dispatch:
     inputs:
       image:

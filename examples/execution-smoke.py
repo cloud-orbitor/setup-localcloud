@@ -53,14 +53,18 @@ if profile == 'cloudrun':
             assert b'LOCALCLOUD_CI_HTTP_OK' in response.read()
         print('Cloud Run: SDK deployment, native HTTP execution and readback passed')
     finally:
+        original_error = sys.exc_info()[1]
+        deletion_error = None
         if created:
             try: client.delete_service(name=f'{parent}/services/{name}', timeout=30).result(timeout=180)
-            except Exception as error: print('Cloud Run deletion:', error, file=sys.stderr)
+            except Exception as error: deletion_error = error
         try: docker('rm', '-f', '-v', fixture)
         except subprocess.CalledProcessError: pass
         try: docker('rmi', image)
         except subprocess.CalledProcessError: pass
         client.transport.close()
+        if deletion_error and original_error is None:
+            raise RuntimeError('Cloud Run SDK deletion failed') from deletion_error
 elif profile == 'dataproc':
     from google.cloud import dataproc_v1, storage
     from google.cloud.dataproc_v1.services.cluster_controller.transports.grpc import ClusterControllerGrpcTransport
@@ -84,6 +88,7 @@ elif profile == 'dataproc':
         assert job.status.state == dataproc_v1.JobStatus.State.DONE, job.status
         print('Dataproc: SDK cluster creation and native Spark job passed')
     finally:
+        original_error = sys.exc_info()[1]
         deletion_error = None
         if created:
             try: controller.delete_cluster(project_id=project, region='us-central1', cluster_name=name, timeout=30).result(timeout=180)
@@ -91,7 +96,7 @@ elif profile == 'dataproc':
         try: bucket.delete(force=True)
         except Exception: pass
         objects.close(); controller.transport.close(); jobs.transport.close()
-        if deletion_error:
+        if deletion_error and original_error is None:
             raise RuntimeError('Dataproc SDK deletion failed; a corrected runtime image is required') from deletion_error
 elif profile == 'gke':
     from google.cloud import container_v1
@@ -124,9 +129,21 @@ elif profile == 'gke':
         docker('exec', node, 'kubectl', 'wait', '--for=condition=Ready', 'pod/' + name, '--timeout=90s')
         print('GKE: SDK lifecycle, native Kubernetes API, ready node and native pod execution passed')
     finally:
+        original_error = sys.exc_info()[1]
+        deletion_error = None
         if created:
-            try: client.delete_cluster(name=f'{location}/clusters/{name}', timeout=30)
-            except Exception as error: print('GKE deletion:', error, file=sys.stderr)
+            try:
+                operation = client.delete_cluster(name=f'{location}/clusters/{name}', timeout=30)
+                deadline = time.monotonic() + 180
+                while operation.status != container_v1.Operation.Status.DONE:
+                    assert time.monotonic() < deadline, 'GKE deletion deadline exceeded'
+                    time.sleep(1)
+                    operation_name = operation.name if operation.name.startswith('projects/') else f'{location}/operations/{operation.name}'
+                    operation = client.get_operation(name=operation_name, timeout=30)
+                assert not operation.error.code, operation.error
+            except Exception as error: deletion_error = error
         client.transport.close()
+        if deletion_error and original_error is None:
+            raise RuntimeError('GKE SDK deletion failed') from deletion_error
 else:
     raise ValueError('Expected cloudrun, dataproc or gke')
